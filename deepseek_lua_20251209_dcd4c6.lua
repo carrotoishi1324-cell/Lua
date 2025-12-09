@@ -1,0 +1,894 @@
+-- // SHOT OR DIE - WAVE TERMINAL | V1.0 //
+
+-- Load UI Library
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Vovabro46/trash/refs/heads/main/Test.lua"))()
+
+-- Services
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Camera = game:GetService("Workspace").CurrentCamera
+local Workspace = game:GetService("Workspace")
+
+-- Player
+local Player = Players.LocalPlayer
+local Mouse = Player:GetMouse()
+
+-- Aimbot Variables
+local aimbotConnection = nil
+local aimbotEnabled = false
+local targetHead = true
+local wallCheckEnabled = true
+local aimKey = Enum.UserInputType.MouseButton2
+local smoothness = 0.1
+local fovRadius = 250
+local teamCheck = true
+local prediction = true
+local triggerBot = false
+local silentAim = false
+
+-- ESP Variables
+local espEnabled = false
+local espConnection = nil
+local espHighlights = {}
+local espTracers = {}
+local espBoxes = {}
+local espShowNames = true
+local espShowHealth = true
+local espShowDistance = true
+local espShowBoxes = true
+local espShowTracers = true
+local espShowHighlights = true
+local espColor = Color3.fromRGB(255, 0, 0)
+local espTeamColor = true
+
+-- Movement Variables
+local walkspeedEnabled = false
+local jumppowerEnabled = false
+local currentWalkspeed = 50
+local currentJumppower = 75
+local defaultWalkspeed = 16
+local defaultJumppower = 50
+local infJumpEnabled = false
+local noclipEnabled = false
+
+-- Colors
+local COLOR_ON = Color3.fromRGB(0, 200, 0)
+local COLOR_OFF = Color3.fromRGB(200, 0, 0)
+
+-----------------------------------------------------------
+--                     AIMBOT FUNCTIONS
+-----------------------------------------------------------
+
+local function isEnemy(player)
+    return player ~= Player and player.Character and 
+           player.Character:FindFirstChild("Humanoid") and 
+           player.Character.Humanoid.Health > 0
+end
+
+local function isTargetVisible(targetPart)
+    if not targetPart then return false end
+    if not wallCheckEnabled then return true end
+    
+    local character = Player.Character
+    if not character then return false end
+    
+    local head = character:FindFirstChild("Head")
+    if not head then return false end
+    
+    local origin = head.Position
+    local direction = (targetPart.Position - origin).Unit
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    raycastParams.FilterDescendantsInstances = {character}
+    raycastParams.IgnoreWater = true
+    
+    local raycastResult = Workspace:Raycast(origin, direction * 1000, raycastParams)
+    
+    if raycastResult then
+        local hitPart = raycastResult.Instance
+        if hitPart and hitPart:IsDescendantOf(targetPart.Parent) then
+            return true
+        end
+        return false
+    end
+    
+    return true
+end
+
+function getClosestEnemy()
+    local smallest = math.huge
+    local closest = nil
+    
+    local myHRP = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return nil end
+
+    for _, enemy in pairs(Players:GetPlayers()) do
+        if isEnemy(enemy) then
+            -- Team check
+            if teamCheck and enemy.Team and Player.Team and enemy.Team == Player.Team then
+                continue
+            end
+            
+            local root = enemy.Character:FindFirstChild("HumanoidRootPart")
+            if root then
+                if not wallCheckEnabled or isTargetVisible(root) then
+                    local dist = (root.Position - myHRP.Position).Magnitude
+                    if dist < smallest and dist <= fovRadius then
+                        smallest = dist
+                        closest = enemy.Character
+                    end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+function setAim(pos)
+    if not pos then return end
+    
+    local head = Player.Character and Player.Character:FindFirstChild("Head")
+    if head then
+        local dir = (pos - head.Position).Unit
+        local targetCFrame = CFrame.new(head.Position, head.Position + dir)
+        local currentCFrame = Camera.CFrame
+        
+        -- Smooth aiming
+        local smoothCFrame = currentCFrame:Lerp(targetCFrame, smoothness)
+        Camera.CFrame = smoothCFrame
+    end
+end
+
+function instantAim(pos)
+    if not pos then return end
+    
+    local head = Player.Character and Player.Character:FindFirstChild("Head")
+    if head then
+        local dir = (pos - head.Position).Unit
+        Camera.CFrame = CFrame.new(head.Position, head.Position + dir)
+    end
+end
+
+function mainAimbotLoop()
+    if not aimbotEnabled then return end
+    
+    local target = getClosestEnemy()
+    if target then
+        local aimPos = nil
+        
+        if targetHead then
+            local head = target:FindFirstChild("Head")
+            if head then
+                aimPos = head.Position
+                if prediction then
+                    -- Simple prediction
+                    local velocity = head.Velocity
+                    aimPos = aimPos + (velocity * 0.1)
+                end
+            end
+        else
+            local hrp = target:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                aimPos = hrp.Position
+                if prediction then
+                    local velocity = hrp.Velocity
+                    aimPos = aimPos + (velocity * 0.1)
+                end
+            end
+        end
+        
+        if aimPos then
+            if not wallCheckEnabled or isTargetVisible(targetHead and target:FindFirstChild("Head") or target:FindFirstChild("HumanoidRootPart")) then
+                if silentAim then
+                    -- Silent aim doesn't move camera
+                else
+                    setAim(aimPos)
+                end
+                
+                if triggerBot then
+                    -- Auto shoot
+                    mouse1click()
+                end
+            end
+        end
+    end
+end
+
+-----------------------------------------------------------
+--                     ESP FUNCTIONS
+-----------------------------------------------------------
+
+local function createESP(player)
+    if not player.Character then return end
+    
+    local character = player.Character
+    local humanoid = character:FindFirstChild("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    
+    if not humanoid or not root then return end
+    
+    -- Remove existing ESP
+    if espHighlights[player] then espHighlights[player]:Destroy() end
+    if espTracers[player] then espTracers[player]:Remove() end
+    if espBoxes[player] then espBoxes[player]:Destroy() end
+    
+    -- Highlight
+    if espShowHighlights then
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "ESP_Highlight"
+        highlight.Adornee = character
+        highlight.FillTransparency = 0.7
+        highlight.OutlineTransparency = 0
+        highlight.FillColor = espTeamColor and (player.Team and player.Team.TeamColor.Color or espColor) or espColor
+        highlight.OutlineColor = Color3.new(1, 1, 1)
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.Parent = character
+        espHighlights[player] = highlight
+    end
+    
+    -- Billboard for info
+    if espShowNames or espShowHealth or espShowDistance then
+        local billboard = Instance.new("BillboardGui")
+        billboard.Name = "ESP_Info"
+        billboard.Adornee = root
+        billboard.Size = UDim2.new(0, 200, 0, 50)
+        billboard.StudsOffset = Vector3.new(0, 3, 0)
+        billboard.AlwaysOnTop = true
+        billboard.MaxDistance = 1000
+        billboard.Parent = root
+        
+        local infoFrame = Instance.new("Frame")
+        infoFrame.BackgroundTransparency = 1
+        infoFrame.Size = UDim2.new(1, 0, 1, 0)
+        infoFrame.Parent = billboard
+        
+        if espShowNames then
+            local nameLabel = Instance.new("TextLabel")
+            nameLabel.Text = player.Name
+            nameLabel.TextColor3 = Color3.new(1, 1, 1)
+            nameLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+            nameLabel.TextStrokeTransparency = 0
+            nameLabel.TextSize = 14
+            nameLabel.Font = Enum.Font.GothamBold
+            nameLabel.BackgroundTransparency = 1
+            nameLabel.Size = UDim2.new(1, 0, 0.33, 0)
+            nameLabel.Parent = infoFrame
+        end
+        
+        if espShowHealth then
+            local healthLabel = Instance.new("TextLabel")
+            healthLabel.Text = "HP: " .. math.floor(humanoid.Health) .. "/" .. humanoid.MaxHealth
+            healthLabel.TextColor3 = Color3.new(1, 1, 1)
+            healthLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+            healthLabel.TextStrokeTransparency = 0
+            healthLabel.TextSize = 12
+            healthLabel.Font = Enum.Font.Gotham
+            healthLabel.BackgroundTransparency = 1
+            healthLabel.Size = UDim2.new(1, 0, 0.33, 0)
+            healthLabel.Position = UDim2.new(0, 0, 0.33, 0)
+            healthLabel.Parent = infoFrame
+        end
+        
+        if espShowDistance then
+            local distanceLabel = Instance.new("TextLabel")
+            distanceLabel.TextColor3 = Color3.new(1, 1, 1)
+            distanceLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+            distanceLabel.TextStrokeTransparency = 0
+            distanceLabel.TextSize = 12
+            distanceLabel.Font = Enum.Font.Gotham
+            distanceLabel.BackgroundTransparency = 1
+            distanceLabel.Size = UDim2.new(1, 0, 0.33, 0)
+            distanceLabel.Position = UDim2.new(0, 0, 0.66, 0)
+            distanceLabel.Parent = infoFrame
+        end
+        
+        espBoxes[player] = billboard
+    end
+    
+    -- Tracer
+    if espShowTracers then
+        local tracer = Drawing.new("Line")
+        tracer.Visible = false
+        tracer.Color = espTeamColor and (player.Team and player.Team.TeamColor.Color or espColor) or espColor
+        tracer.Thickness = 2
+        tracer.Transparency = 1
+        espTracers[player] = tracer
+    end
+end
+
+local function updateESP()
+    if not espEnabled then return end
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= Player and player.Character then
+            if not espHighlights[player] and not espBoxes[player] and not espTracers[player] then
+                createESP(player)
+            end
+            
+            -- Update info
+            local billboard = espBoxes[player]
+            if billboard and billboard.Parent then
+                local character = player.Character
+                local humanoid = character:FindFirstChild("Humanoid")
+                local root = character:FindFirstChild("HumanoidRootPart")
+                
+                if humanoid and root then
+                    -- Update health
+                    if espShowHealth then
+                        local healthLabel = billboard:FindFirstChildWhichIsA("Frame"):FindFirstChildWhichIsA("TextLabel", function(lbl)
+                            return lbl.Text:find("HP:")
+                        end)
+                        if healthLabel then
+                            healthLabel.Text = "HP: " .. math.floor(humanoid.Health) .. "/" .. humanoid.MaxHealth
+                            
+                            -- Color based on health
+                            local healthPercent = humanoid.Health / humanoid.MaxHealth
+                            if healthPercent > 0.7 then
+                                healthLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+                            elseif healthPercent > 0.3 then
+                                healthLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+                            else
+                                healthLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+                            end
+                        end
+                    end
+                    
+                    -- Update distance
+                    if espShowDistance then
+                        local distanceLabel = billboard:FindFirstChildWhichIsA("Frame"):FindFirstChildWhichIsA("TextLabel", function(lbl)
+                            return not lbl.Text:find("HP:") and not lbl.Text:find(player.Name)
+                        end)
+                        if distanceLabel and Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") then
+                            local distance = math.floor((Player.Character.HumanoidRootPart.Position - root.Position).Magnitude)
+                            distanceLabel.Text = distance .. " studs"
+                        end
+                    end
+                end
+            end
+            
+            -- Update tracer
+            local tracer = espTracers[player]
+            if tracer and player.Character and Player.Character and espShowTracers then
+                local root = player.Character:FindFirstChild("HumanoidRootPart")
+                local myRoot = Player.Character:FindFirstChild("HumanoidRootPart")
+                
+                if root and myRoot then
+                    local vector, onScreen = Camera:WorldToViewportPoint(root.Position)
+                    local myVector = Camera:WorldToViewportPoint(myRoot.Position)
+                    
+                    if onScreen then
+                        tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                        tracer.To = Vector2.new(vector.X, vector.Y)
+                        tracer.Visible = true
+                    else
+                        tracer.Visible = false
+                    end
+                else
+                    tracer.Visible = false
+                end
+            end
+        else
+            -- Remove ESP for players without character
+            if espHighlights[player] then espHighlights[player]:Destroy() espHighlights[player] = nil end
+            if espTracers[player] then espTracers[player]:Remove() espTracers[player] = nil end
+            if espBoxes[player] then espBoxes[player]:Destroy() espBoxes[player] = nil end
+        end
+    end
+end
+
+local function clearESP()
+    for _, highlight in pairs(espHighlights) do
+        if highlight then highlight:Destroy() end
+    end
+    espHighlights = {}
+    
+    for _, tracer in pairs(espTracers) do
+        if tracer then tracer:Remove() end
+    end
+    espTracers = {}
+    
+    for _, box in pairs(espBoxes) do
+        if box then box:Destroy() end
+    end
+    espBoxes = {}
+end
+
+-----------------------------------------------------------
+--                     MOVEMENT FUNCTIONS
+-----------------------------------------------------------
+
+local function applyWalkspeed()
+    local char = Player.Character
+    if char and char:FindFirstChild("Humanoid") then
+        char.Humanoid.WalkSpeed = walkspeedEnabled and currentWalkspeed or defaultWalkspeed
+    end
+end
+
+local function applyJumppower()
+    local char = Player.Character
+    if char and char:FindFirstChild("Humanoid") then
+        char.Humanoid.JumpPower = jumppowerEnabled and currentJumppower or defaultJumppower
+    end
+end
+
+local function noclipLoop()
+    if noclipEnabled and Player.Character then
+        for _, part in pairs(Player.Character:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                part.CanCollide = false
+            end
+        end
+    end
+end
+
+-----------------------------------------------------------
+--                     CREATE WINDOW
+-----------------------------------------------------------
+
+local Window = Library:Window({
+   text = "SHOT OR DIE"
+})
+
+local Tab1 = Window:Tab({
+   text = "Main"
+})
+
+local Tab2 = Window:Tab({
+   text = "Aim"
+})
+
+local Tab3 = Window:Tab({
+   text = "Esp"
+})
+
+local Tab4 = Window:Tab({
+   text = "Movement"
+})
+
+-- Main Tab
+Tab1:Section({
+   text = "Wave Terminal"
+})
+
+Tab1:Button({
+   text = "Anti-AFK",
+   callback = function()
+       local VirtualUser = game:GetService("VirtualUser")
+       Player.Idled:Connect(function()
+           VirtualUser:CaptureController()
+           VirtualUser:ClickButton2(Vector2.new())
+       end)
+       Library:Notification({
+           text = "Anti-AFK enabled"
+       })
+   end
+})
+
+Tab1:Button({
+   text = "Server Hop",
+   callback = function()
+       loadstring(game:HttpGet("https://raw.githubusercontent.com/XNEOFF/Hop/main/Hop.txt"))()
+   end
+})
+
+Tab1:Button({
+   text = "Rejoin",
+   callback = function()
+       game:GetService("TeleportService"):Teleport(game.PlaceId, Player)
+   end
+})
+
+-- Aim Tab
+local AimSection1 = Tab2:Section({
+   text = "Aimbot Settings"
+})
+
+AimSection1:Toggle({
+   text = "Enable Aimbot",
+   flag = "aimbot_toggle",
+   state = aimbotEnabled,
+   callback = function(state)
+       aimbotEnabled = state
+       if state and not aimbotConnection then
+           aimbotConnection = RunService.Heartbeat:Connect(mainAimbotLoop)
+       elseif not state and aimbotConnection then
+           aimbotConnection:Disconnect()
+           aimbotConnection = nil
+       end
+   end
+})
+
+AimSection1:Keybind({
+   text = "Aim Key",
+   flag = "aim_key",
+   key = aimKey,
+   callback = function(key)
+       aimKey = key
+   end
+})
+
+AimSection1:Toggle({
+   text = "Aim at Head",
+   flag = "aim_head",
+   state = targetHead,
+   callback = function(state)
+       targetHead = state
+   end
+})
+
+AimSection1:Toggle({
+   text = "Wall Check",
+   flag = "wall_check",
+   state = wallCheckEnabled,
+   callback = function(state)
+       wallCheckEnabled = state
+   end
+})
+
+AimSection1:Toggle({
+   text = "Team Check",
+   flag = "team_check",
+   state = teamCheck,
+   callback = function(state)
+       teamCheck = state
+   end
+})
+
+local AimSection2 = Tab2:Section({
+   text = "Advanced"
+})
+
+AimSection2:Slider({
+   text = "Smoothness",
+   flag = "aim_smoothness",
+   value = smoothness * 100,
+   min = 1,
+   max = 100,
+   callback = function(value)
+       smoothness = value / 100
+   end
+})
+
+AimSection2:Slider({
+   text = "FOV Radius",
+   flag = "fov_radius",
+   value = fovRadius,
+   min = 50,
+   max = 500,
+   callback = function(value)
+       fovRadius = value
+   end
+})
+
+AimSection2:Toggle({
+   text = "Prediction",
+   flag = "prediction",
+   state = prediction,
+   callback = function(state)
+       prediction = state
+   end
+})
+
+AimSection2:Toggle({
+   text = "Trigger Bot",
+   flag = "trigger_bot",
+   state = triggerBot,
+   callback = function(state)
+       triggerBot = state
+   end
+})
+
+AimSection2:Toggle({
+   text = "Silent Aim",
+   flag = "silent_aim",
+   state = silentAim,
+   callback = function(state)
+       silentAim = state
+   end
+})
+
+-- ESP Tab
+local ESPSection1 = Tab3:Section({
+   text = "ESP Settings"
+})
+
+ESPSection1:Toggle({
+   text = "Enable ESP",
+   flag = "esp_toggle",
+   state = espEnabled,
+   callback = function(state)
+       espEnabled = state
+       if state then
+           if not espConnection then
+               espConnection = RunService.Heartbeat:Connect(updateESP)
+           end
+           -- Create ESP for existing players
+           for _, player in pairs(Players:GetPlayers()) do
+               if player ~= Player then
+                   createESP(player)
+               end
+           end
+       else
+           if espConnection then
+               espConnection:Disconnect()
+               espConnection = nil
+           end
+           clearESP()
+       end
+   end
+})
+
+ESPSection1:Toggle({
+   text = "Show Names",
+   flag = "esp_names",
+   state = espShowNames,
+   callback = function(state)
+       espShowNames = state
+       clearESP()
+       if espEnabled then
+           for _, player in pairs(Players:GetPlayers()) do
+               if player ~= Player then
+                   createESP(player)
+               end
+           end
+       end
+   end
+})
+
+ESPSection1:Toggle({
+   text = "Show Health",
+   flag = "esp_health",
+   state = espShowHealth,
+   callback = function(state)
+       espShowHealth = state
+   end
+})
+
+ESPSection1:Toggle({
+   text = "Show Distance",
+   flag = "esp_distance",
+   state = espShowDistance,
+   callback = function(state)
+       espShowDistance = state
+   end
+})
+
+ESPSection1:Toggle({
+   text = "Team Color",
+   flag = "esp_teamcolor",
+   state = espTeamColor,
+   callback = function(state)
+       espTeamColor = state
+       clearESP()
+       if espEnabled then
+           for _, player in pairs(Players:GetPlayers()) do
+               if player ~= Player then
+                   createESP(player)
+               end
+           end
+       end
+   end
+})
+
+local ESPSection2 = Tab3:Section({
+   text = "Visuals"
+})
+
+ESPSection2:Toggle({
+   text = "Highlights",
+   flag = "esp_highlights",
+   state = espShowHighlights,
+   callback = function(state)
+       espShowHighlights = state
+       if not state then
+           for _, highlight in pairs(espHighlights) do
+               if highlight then highlight:Destroy() end
+           end
+           espHighlights = {}
+       end
+   end
+})
+
+ESPSection2:Toggle({
+   text = "Boxes",
+   flag = "esp_boxes",
+   state = espShowBoxes,
+   callback = function(state)
+       espShowBoxes = state
+       if not state then
+           for _, box in pairs(espBoxes) do
+               if box then box:Destroy() end
+           end
+           espBoxes = {}
+       end
+   end
+})
+
+ESPSection2:Toggle({
+   text = "Tracers",
+   flag = "esp_tracers",
+   state = espShowTracers,
+   callback = function(state)
+       espShowTracers = state
+       if not state then
+           for _, tracer in pairs(espTracers) do
+               if tracer then tracer:Remove() end
+           end
+           espTracers = {}
+       end
+   end
+})
+
+ESPSection2:Colorpicker({
+   text = "ESP Color",
+   flag = "esp_color",
+   color = espColor,
+   callback = function(color)
+       espColor = color
+       -- Update existing ESP colors
+       for _, highlight in pairs(espHighlights) do
+           if highlight then
+               highlight.FillColor = espTeamColor and (highlight.Adornee.Parent and Players:GetPlayerFromCharacter(highlight.Adornee.Parent) and Players:GetPlayerFromCharacter(highlight.Adornee.Parent).Team and Players:GetPlayerFromCharacter(highlight.Adornee.Parent).Team.TeamColor.Color or espColor) or espColor
+           end
+       end
+       for _, tracer in pairs(espTracers) do
+           if tracer then
+               tracer.Color = espTeamColor and (tracer.Adornee and Players:GetPlayerFromCharacter(tracer.Adornee.Parent) and Players:GetPlayerFromCharacter(tracer.Adornee.Parent).Team and Players:GetPlayerFromCharacter(tracer.Adornee.Parent).Team.TeamColor.Color or espColor) or espColor
+           end
+       end
+   end
+})
+
+-- Movement Tab
+local MoveSection1 = Tab4:Section({
+   text = "Speed"
+})
+
+MoveSection1:Toggle({
+   text = "Walkspeed",
+   flag = "walkspeed_toggle",
+   state = walkspeedEnabled,
+   callback = function(state)
+       walkspeedEnabled = state
+       applyWalkspeed()
+   end
+})
+
+MoveSection1:Slider({
+   text = "Walkspeed Value",
+   flag = "walkspeed_value",
+   value = currentWalkspeed,
+   min = 16,
+   max = 200,
+   callback = function(value)
+       currentWalkspeed = value
+       applyWalkspeed()
+   end
+})
+
+MoveSection1:Toggle({
+   text = "Jumppower",
+   flag = "jumppower_toggle",
+   state = jumppowerEnabled,
+   callback = function(state)
+       jumppowerEnabled = state
+       applyJumppower()
+   end
+})
+
+MoveSection1:Slider({
+   text = "Jumppower Value",
+   flag = "jumppower_value",
+   value = currentJumppower,
+   min = 50,
+   max = 200,
+   callback = function(value)
+       currentJumppower = value
+       applyJumppower()
+   end
+})
+
+local MoveSection2 = Tab4:Section({
+   text = "Other"
+})
+
+MoveSection2:Toggle({
+   text = "Inf Jump",
+   flag = "infjump_toggle",
+   state = infJumpEnabled,
+   callback = function(state)
+       infJumpEnabled = state
+   end
+})
+
+MoveSection2:Toggle({
+   text = "NoClip",
+   flag = "noclip_toggle",
+   state = noclipEnabled,
+   callback = function(state)
+       noclipEnabled = state
+       if state and not noclipEnabled then
+           RunService.Heartbeat:Connect(noclipLoop)
+       end
+   end
+})
+
+-- Inf Jump functionality
+UserInputService.JumpRequest:Connect(function()
+    if infJumpEnabled and Player.Character then
+        local humanoid = Player.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end
+end)
+
+-- Apply movement when character respawns
+Player.CharacterAdded:Connect(function()
+    applyWalkspeed()
+    applyJumppower()
+end)
+
+-- Initial apply
+if Player.Character then
+    applyWalkspeed()
+    applyJumppower()
+end
+
+-- NoClip loop
+RunService.Heartbeat:Connect(function()
+    if noclipEnabled then
+        noclipLoop()
+    end
+end)
+
+-- Player added/removed for ESP
+Players.PlayerAdded:Connect(function(player)
+    if espEnabled then
+        createESP(player)
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    if espHighlights[player] then espHighlights[player]:Destroy() espHighlights[player] = nil end
+    if espTracers[player] then espTracers[player]:Remove() espTracers[player] = nil end
+    if espBoxes[player] then espBoxes[player]:Destroy() espBoxes[player] = nil end
+end)
+
+-- Character died for ESP
+Player.CharacterAdded:Connect(function(character)
+    character:WaitForChild("Humanoid").Died:Connect(function()
+        if espEnabled then
+            clearESP()
+            task.wait(2)
+            if espEnabled then
+                for _, player in pairs(Players:GetPlayers()) do
+                    if player ~= Player then
+                        createESP(player)
+                    end
+                end
+            end
+        end
+    end)
+end)
+
+-- Initial ESP setup if enabled
+if espEnabled then
+    espConnection = RunService.Heartbeat:Connect(updateESP)
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= Player then
+            createESP(player)
+        end
+    end
+end
+
+-- Aimbot setup if enabled
+if aimbotEnabled then
+    aimbotConnection = RunService.Heartbeat:Connect(mainAimbotLoop)
+end
+
+Library:Notification({
+   text = "SHOT OR DIE | WAVE TERMINAL loaded!"
+})
